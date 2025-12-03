@@ -1,0 +1,114 @@
+import streamlit as st
+import folium
+from streamlit_folium import st_folium
+import requests # API 요청을 위한 라이브러리
+
+# 페이지 설정
+st.set_page_config(page_title="Smart Taxi Finder", page_icon="🚖")
+
+# --- 1. 설정 및 API 키 가져오기 ---
+# 주의: 실제 배포시에는 API 키를 코드에 직접 적지 말고 st.secrets를 써야 합니다. (아래 설명 참조)
+KAKAO_API_KEY = st.secrets["kakao_api_key"] 
+
+st.title("🚖 스마트 전시장 택시 & 길찾기")
+
+# --- 2. 전시장 데이터 (출발지) ---
+venues = {
+    "COEX (서울 삼성동)": {"coords": [37.5125, 127.0588], "desc": "동문 앞 택시 승강장"},
+    "KINTEX (일산)": {"coords": [37.6695, 126.7475], "desc": "제1전시장 3번 게이트"},
+    "BEXCO (부산)": {"coords": [35.1695, 129.1365], "desc": "제1전시장 정문 앞"}
+}
+
+# 사이드바: 출발지 선택
+st.sidebar.header("📍 출발지 (전시장)")
+selected_venue = st.sidebar.selectbox("현재 계신 곳을 선택하세요", list(venues.keys()))
+start_coords = venues[selected_venue]["coords"]
+start_desc = venues[selected_venue]["desc"]
+
+# --- 3. 카카오 API 함수 (장소 검색) ---
+def get_location_coords(query):
+    url = "https://dapi.kakao.com/v2/local/search/keyword.json"
+    headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
+    params = {"query": query}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+        if data['documents']:
+            # 가장 정확도가 높은 첫 번째 결과의 좌표 반환 (y=위도, x=경도)
+            y = float(data['documents'][0]['y'])
+            x = float(data['documents'][0]['x'])
+            place_name = data['documents'][0]['place_name']
+            return [y, x], place_name
+        else:
+            return None, None
+    except Exception as e:
+        return None, None
+
+# --- 4. 메인 화면 로직 ---
+st.info(f"🚩 **현재 출발지:** {start_desc}")
+
+# 목적지 입력 받기
+destination = st.text_input("목적지를 입력하세요 (예: 서울역, 하얏트호텔)", "")
+
+destination_coords = None
+destination_name = "목적지"
+
+if destination:
+    # API 호출
+    destination_coords, destination_name = get_location_coords(destination)
+    
+    if destination_coords:
+        st.success(f"✅ **{destination_name}**의 위치를 찾았습니다!")
+    else:
+        st.error("장소를 찾을 수 없습니다. 다시 입력해주세요.")
+
+# --- 5. 지도 그리기 (Folium) ---
+# 지도의 중심은 출발지와 도착지의 중간쯤으로 설정
+if destination_coords:
+    center_lat = (start_coords[0] + destination_coords[0]) / 2
+    center_lng = (start_coords[1] + destination_coords[1]) / 2
+    zoom = 11 # 줌을 약간 멀리
+else:
+    center_lat, center_lng = start_coords
+    zoom = 16
+
+m = folium.Map(location=[center_lat, center_lng], zoom_start=zoom)
+
+# 출발지 마커 (파랑 - 택시)
+folium.Marker(
+    start_coords,
+    popup=f"출발: {selected_venue}",
+    icon=folium.Icon(color="blue", icon="taxi", prefix='fa')
+).add_to(m)
+
+# 도착지 마커 (빨강 - 깃발)
+if destination_coords:
+    folium.Marker(
+        destination_coords,
+        popup=f"도착: {destination_name}",
+        icon=folium.Icon(color="red", icon="flag")
+    ).add_to(m)
+    
+    # 선 긋기 (직선 경로 표시)
+    folium.PolyLine(
+        locations=[start_coords, destination_coords],
+        color="red",
+        weight=3,
+        opacity=0.7,
+        dash_array='5'
+    ).add_to(m)
+
+st_folium(m, width=700, height=400)
+
+# --- 6. 앱 연동 버튼 (Dynamic Link) ---
+if destination_coords:
+    st.markdown("### 🏃‍♂️ 바로 길찾기 실행")
+    
+    # 카카오맵 URL 스킴 (도착지 좌표 포함)
+    kakao_url = f"https://map.kakao.com/link/to/{destination_name},{destination_coords[0]},{destination_coords[1]}/from/{selected_venue},{start_coords[0]},{start_coords[1]}"
+    
+    st.link_button(f"🚕 카카오맵으로 '{destination_name}' 가는 길 보기", kakao_url, use_container_width=True)
+
+elif not destination:
+    st.markdown("목적지를 입력하면 길찾기 버튼이 나타납니다.")
