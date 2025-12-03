@@ -1,101 +1,82 @@
 import streamlit as st
-import plotly.graph_objects as go
-import pandas as pd
+import folium
+from streamlit_folium import st_folium
 
 # 페이지 설정
-st.set_page_config(layout="wide", page_title="Simple Exhibition ROI", page_icon="💰")
+st.set_page_config(page_title="Taxi Finder", page_icon="🚖")
 
-# 제목
-st.title("💰 전시 참가 ROI 시뮬레이터")
-st.markdown("복잡한 엑셀 없이, **예상 비용과 성과**를 입력하여 투자 가치를 즉시 확인하세요.")
+st.title("🚖 전시장 택시 승강장 안내")
+st.write("관람하고 계신 **전시장**을 선택해주세요.")
 
-# --- 사이드바: 입력 패널 ---
-st.sidebar.header("1. 비용 입력 (Cost)")
-cost_booth = st.sidebar.number_input("부스 임차료 및 시공비 (만원)", value=500, step=50)
-cost_staff = st.sidebar.number_input("인건비 및 체류비 (만원)", value=200, step=10)
-cost_marketing = st.sidebar.number_input("마케팅 및 판촉물 (만원)", value=100, step=10)
-cost_etc = st.sidebar.number_input("기타 예비비 (만원)", value=50, step=10)
-
-st.sidebar.markdown("---")
-st.sidebar.header("2. 예상 성과 입력 (Performance)")
-leads_count = st.sidebar.slider("획득 명함(Lead) 수 (개)", 0, 1000, 200)
-conversion_rate = st.sidebar.slider("상담 → 계약 전환율 (%)", 1.0, 50.0, 5.0, step=0.5)
-deal_value = st.sidebar.number_input("계약 건당 평균 매출 (만원)", value=300, step=100)
-
-# --- 계산 로직 ---
-total_cost = cost_booth + cost_staff + cost_marketing + cost_etc
-expected_deals = int(leads_count * (conversion_rate / 100))
-expected_revenue = expected_deals * deal_value
-profit = expected_revenue - total_cost
-
-# ROI 계산 (분모가 0일 경우 방지)
-if total_cost > 0:
-    roi_percentage = (profit / total_cost) * 100
-else:
-    roi_percentage = 0
-
-cost_per_lead = total_cost / leads_count if leads_count > 0 else 0
-
-# --- 메인 대시보드 화면 ---
-
-# 1. 핵심 지표 (Metrics)
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("총 지출 (Cost)", f"{total_cost:,.0f} 만원", delta_color="inverse")
-col2.metric("예상 매출 (Revenue)", f"{expected_revenue:,.0f} 만원")
-col3.metric("순수익 (Profit)", f"{profit:,.0f} 만원", delta=f"{roi_percentage:.1f}% ROI")
-col4.metric("리드 당 비용 (CPL)", f"{cost_per_lead:,.0f} 만원")
-
-st.markdown("---")
-
-# 2. 시각화 (Plotly)
-chart_col1, chart_col2 = st.columns([1, 1])
-
-with chart_col1:
-    st.subheader("📊 비용 vs 매출 비교")
-    # 단순 막대 그래프
-    fig_bar = go.Figure(data=[
-        go.Bar(name='총 비용', x=['금액'], y=[total_cost], marker_color='#FF6B6B'),
-        go.Bar(name='예상 매출', x=['금액'], y=[expected_revenue], marker_color='#4ECDC4')
-    ])
-    fig_bar.update_layout(barmode='group', height=400)
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-with chart_col2:
-    st.subheader("🚀 ROI 달성률 (손익분기점)")
-    # 게이지 차트 (손익분기점 시각화)
-    fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = roi_percentage,
-        title = {'text': "투자 수익률 (ROI %)"},
-        delta = {'reference': 0}, # 0%가 본전
-        gauge = {
-            'axis': {'range': [-100, 300]}, # -100% ~ 300% 범위
-            'bar': {'color': "darkblue"},
-            'steps' : [
-                {'range': [-100, 0], 'color': "lightgray"},
-                {'range': [0, 300], 'color': "lightgreen"}],
-            'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 0}
-        }
-    ))
-    fig_gauge.update_layout(height=400)
-    st.plotly_chart(fig_gauge, use_container_width=True)
-
-# 3. 데이터 요약 및 다운로드
-st.markdown("### 📝 시뮬레이션 결과 요약")
-result_data = {
-    "구분": ["부스비", "인건비", "마케팅비", "기타", "총 비용", "획득 명함", "전환율", "예상 계약수", "예상 매출", "ROI"],
-    "값": [cost_booth, cost_staff, cost_marketing, cost_etc, total_cost, leads_count, f"{conversion_rate}%", expected_deals, expected_revenue, f"{roi_percentage:.1f}%"]
+# --- 데이터: 주요 전시장 및 택시 승강장 좌표 (위도, 경도) ---
+# 실무에서는 이 좌표를 더 정확하게 찍어주시면 됩니다.
+venues = {
+    "COEX (서울 삼성동)": {
+        "center": [37.5118, 127.0593], # 코엑스 중심
+        "taxi": [37.5125, 127.0588],   # 동문 앞 택시 승강장 (예시)
+        "desc": "코엑스 동문 앞 대로변"
+    },
+    "KINTEX 제1전시장 (일산)": {
+        "center": [37.6690, 126.7460],
+        "taxi": [37.6695, 126.7475],   # 1전시장 앞 승강장
+        "desc": "제1전시장 3번 게이트 앞"
+    },
+    "KINTEX 제2전시장 (일산)": {
+        "center": [37.6645, 126.7410],
+        "taxi": [37.6640, 126.7405],
+        "desc": "제2전시장 7번 게이트 앞"
+    },
+    "BEXCO (부산)": {
+        "center": [35.1691, 129.1360],
+        "taxi": [35.1695, 129.1365],
+        "desc": "제1전시장 정문 앞 광장"
+    }
 }
-df = pd.DataFrame(result_data)
 
-# 테이블 표시
-st.dataframe(df.set_index("구분").T, use_container_width=True)
+# --- UI: 전시장 선택 ---
+selected_venue_name = st.selectbox("어디에 계신가요?", list(venues.keys()))
+venue_data = venues[selected_venue_name]
 
-# 다운로드 버튼
-csv = df.to_csv().encode('utf-8')
-st.download_button(
-    label="📥 보고서 데이터 다운로드 (CSV)",
-    data=csv,
-    file_name='exhibition_roi_simulation.csv',
-    mime='text/csv',
-)
+# --- 정보 표시 ---
+st.success(f"📍 **택시 타는 곳:** {venue_data['desc']}")
+
+# --- 지도 시각화 (Folium) ---
+# 지도 중심 설정
+m = folium.Map(location=venue_data["center"], zoom_start=17)
+
+# 1. 전시장 위치 마커 (파란색)
+folium.Marker(
+    venue_data["center"],
+    popup=selected_venue_name,
+    icon=folium.Icon(color="blue", icon="info-sign")
+).add_to(m)
+
+# 2. 택시 승강장 위치 마커 (빨간색)
+folium.Marker(
+    venue_data["taxi"],
+    popup="택시 승강장",
+    icon=folium.Icon(color="red", icon="taxi", prefix='fa')
+).add_to(m)
+
+# 지도 그리기
+st_data = st_folium(m, width=700, height=400)
+
+# --- 실전 기능: 길찾기 버튼 (앱 연동) ---
+st.markdown("### 🏃‍♂️ 길찾기 앱으로 바로 연결")
+col1, col2 = st.columns(2)
+
+taxi_lat = venue_data['taxi'][0]
+taxi_lng = venue_data['taxi'][1]
+
+# 네이버지도/카카오맵 URL 스키마 활용
+# 모바일에서 클릭 시 앱이 열리거나 웹지도로 연결됩니다.
+naver_map_url = f"https://map.naver.com/v5/directions/-/-/{taxi_lng},{taxi_lat},택시승강장/-/walk"
+kakao_map_url = f"https://map.kakao.com/link/to/택시승강장,{taxi_lat},{taxi_lng}"
+
+with col1:
+    st.link_button("🟢 네이버 지도로 길찾기", naver_map_url, use_container_width=True)
+
+with col2:
+    st.link_button("🟡 카카오맵으로 길찾기", kakao_map_url, use_container_width=True)
+
+st.info("👆 위 버튼을 누르면 현재 위치에서 승강장까지의 **도보 경로**가 안내됩니다.")
